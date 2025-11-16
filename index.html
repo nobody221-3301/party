@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>学園祭 待ち時間情報</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, serverTimestamp, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Expose Firebase globally for the React component
+        window.firebaseModules = { 
+            initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
+            getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, serverTimestamp, query, orderBy
+        };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;800&display=swap');
+        
+        body {
+            font-family: 'M PLUS Rounded 1c', sans-serif;
+            background-color: #fdf6e3; /* Creamy background */
+        }
+        
+        .card-shadow {
+            box-shadow: 4px 4px 0px 0px rgba(0,0,0,0.1);
+        }
+        
+        .btn-press:active {
+            transform: translateY(2px);
+            box-shadow: 1px 1px 0px 0px rgba(0,0,0,0.1);
+        }
+
+        /* Animations */
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+        .animate-pulse-soft {
+            animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- ICONS (Inline definition to prevent load errors) ---
+        const IconBase = ({ size = 24, color = "currentColor", children, className = "" }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width={size} 
+                height={size} 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke={color} 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round"
+                className={className}
+            >
+                {children}
+            </svg>
+        );
+
+        const Clock = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></IconBase>;
+        const MapPin = (props) => <IconBase {...props}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></IconBase>;
+        const Users = (props) => <IconBase {...props}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconBase>;
+        const Lock = (props) => <IconBase {...props}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></IconBase>;
+        const Unlock = (props) => <IconBase {...props}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></IconBase>;
+        const RefreshCw = (props) => <IconBase {...props}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></IconBase>;
+        const Plus = (props) => <IconBase {...props}><path d="M5 12h14"/><path d="M12 5v14"/></IconBase>;
+        const Minus = (props) => <IconBase {...props}><path d="M5 12h14"/></IconBase>;
+        const AlertCircle = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></IconBase>;
+
+        // --- INITIAL DATA for Setup ---
+        const INITIAL_STALLS = [
+            { id: 'stall_01', name: 'お化け屋敷', waitTime: 45, status: 'open', location: '3F 特別教室' },
+            { id: 'stall_02', name: '焼きそば屋台', waitTime: 10, status: 'open', location: '中庭' },
+            { id: 'stall_03', name: 'ダンス部公演', waitTime: 0, status: 'scheduled', location: '体育館', nextShow: '13:00' },
+            { id: 'stall_04', name: 'メイド喫茶', waitTime: 60, status: 'full', location: '2F 2-B教室' },
+            { id: 'stall_05', name: 'タピオカジュース', waitTime: 5, status: 'open', location: '正門付近' },
+        ];
+
+        // --- APP COMPONENT ---
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [stalls, setStalls] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [isAdmin, setIsAdmin] = useState(false); // Local admin state
+            const [pinInput, setPinInput] = useState("");
+            const [showLoginModal, setShowLoginModal] = useState(false);
+            const [errorMsg, setErrorMsg] = useState("");
+
+            // Simple PIN for "Staff Mode" (In a real app, use proper Auth claims or separate logins)
+            // For a school festival, a shared PIN is usually sufficient.
+            const STAFF_PIN = "2025"; 
+
+            // Access Firebase modules
+            const { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
+                    getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, serverTimestamp, query, orderBy } 
+                    = window.firebaseModules;
+
+            // Config handling: Environment vs Placeholder
+            // NOTE: When deploying to GitHub Pages, replace this block with your own Firebase Config!
+            const firebaseConfig = typeof __firebase_config !== 'undefined' 
+                ? JSON.parse(__firebase_config) 
+                : { apiKey: "AIzaSyCCs0w763O8gdNBsP9JzOZCSwARSVHiQJ8",
+                    authDomain: "party-ed4ea.firebaseapp.com",
+                    projectId: "party-ed4ea",
+                    storageBucket: "party-ed4ea.firebasestorage.app",
+                    messagingSenderId: "796473254656",
+                    appId: "1:796473254656:web:f6b3e7393c1d1c335dc9e5",
+                    measurementId: "G-R3PE80ZN8H"
+                 };
+            
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'festival-demo';
+
+            // Firebase Instances
+            const app = useMemo(() => initializeApp(firebaseConfig), [firebaseConfig]);
+            const auth = useMemo(() => getAuth(app), [app]);
+            const db = useMemo(() => getFirestore(app), [app]);
+
+            // 1. Auth Initialization
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                             await signInWithCustomToken(auth, __initial_auth_token); 
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Auth error:", error);
+                        setErrorMsg("通信エラーが発生しました。再読み込みしてください。");
+                    }
+                };
+                initAuth();
+                return onAuthStateChanged(auth, setUser);
+            }, [auth]);
+
+            // 2. Data Sync (Real-time)
+            useEffect(() => {
+                if (!user) return;
+
+                const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'stalls');
+                
+                // NOTE: Using simple collection query. Sorting handled in JS to avoid index errors on setup.
+                const unsubscribe = onSnapshot(collectionRef, (snapshot) => {
+                    if (snapshot.empty) {
+                        // If no data exists, seed it (Only for demo/first run)
+                        seedInitialData(collectionRef);
+                    } else {
+                        const stallsData = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        // Sort by ID or custom logic
+                        stallsData.sort((a, b) => a.id.localeCompare(b.id));
+                        setStalls(stallsData);
+                    }
+                    setLoading(false);
+                }, (error) => {
+                    console.error("Firestore error:", error);
+                    setErrorMsg("データの取得に失敗しました。");
+                    setLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, [user, db, appId]);
+
+            // Helper to seed data
+            const seedInitialData = async (collectionRef) => {
+                for (const stall of INITIAL_STALLS) {
+                    const docRef = doc(collectionRef, stall.id);
+                    await setDoc(docRef, { ...stall, updatedAt: serverTimestamp() });
+                }
+            };
+
+            // --- Actions ---
+
+            const updateWaitTime = async (stallId, change) => {
+                if (!user) return;
+                const stall = stalls.find(s => s.id === stallId);
+                if (!stall) return;
+
+                let newTime = (stall.waitTime || 0) + change;
+                if (newTime < 0) newTime = 0;
+                if (newTime > 240) newTime = 240; // Max cap
+
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'stalls', stallId);
+                await updateDoc(docRef, {
+                    waitTime: newTime,
+                    updatedAt: serverTimestamp(),
+                    // Auto-update status based on time logic? Optional.
+                    status: newTime === 0 ? 'open' : stall.status 
+                });
+            };
+
+            const updateStatus = async (stallId, newStatus) => {
+                if (!user) return;
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'stalls', stallId);
+                await updateDoc(docRef, {
+                    status: newStatus,
+                    updatedAt: serverTimestamp()
+                });
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (pinInput === STAFF_PIN) {
+                    setIsAdmin(true);
+                    setShowLoginModal(false);
+                    setPinInput("");
+                } else {
+                    alert("パスワードが違います");
+                }
+            };
+
+            // --- UI Components ---
+
+            const StatusBadge = ({ status, waitTime }) => {
+                let color = "bg-blue-100 text-blue-800";
+                let text = "受付中";
+
+                if (status === 'paused') {
+                    color = "bg-gray-200 text-gray-600";
+                    text = "一時中断";
+                } else if (status === 'full') {
+                    color = "bg-red-100 text-red-800";
+                    text = "満員・受付停止";
+                } else if (status === 'scheduled') {
+                    color = "bg-purple-100 text-purple-800";
+                    text = "開催予定";
+                } else if (waitTime >= 60) {
+                    color = "bg-orange-100 text-orange-800";
+                    text = "混雑";
+                } else if (waitTime > 0) {
+                    color = "bg-green-100 text-green-800";
+                    text = "列あり";
+                }
+
+                return (
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${color}`}>
+                        {text}
+                    </span>
+                );
+            };
+
+            // --- Render ---
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-orange-50">
+                        <div className="text-center">
+                            <RefreshCw className="animate-spin mx-auto text-orange-400 mb-2" size={32} />
+                            <p className="text-gray-500 font-bold">読み込み中...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen pb-20 relative max-w-md mx-auto bg-white shadow-xl overflow-hidden">
+                    
+                    {/* Header */}
+                    <header className="bg-orange-400 text-white p-4 shadow-md sticky top-0 z-10 flex justify-between items-center">
+                        <div>
+                            <h1 className="text-xl font-black flex items-center gap-2">
+                                <MapPin size={20} className="text-yellow-200" />
+                                学園祭なび
+                            </h1>
+                            <p className="text-xs text-orange-100 opacity-90">現在の待ち時間をリアルタイム更新中</p>
+                        </div>
+                        <button 
+                            onClick={() => isAdmin ? setIsAdmin(false) : setShowLoginModal(true)}
+                            className="p-2 bg-orange-500 rounded-full hover:bg-orange-600 transition shadow-inner text-white"
+                        >
+                            {isAdmin ? <Unlock size={18} /> : <Lock size={18} />}
+                        </button>
+                    </header>
+
+                    {/* Admin Banner */}
+                    {isAdmin && (
+                        <div className="bg-yellow-100 border-b-2 border-yellow-300 p-2 text-center">
+                            <p className="text-yellow-800 text-sm font-bold flex items-center justify-center gap-2">
+                                <Users size={16} />
+                                スタッフモード起動中（編集可能）
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Main Content */}
+                    <main className="p-4 space-y-4">
+                        {errorMsg && (
+                            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+                                <strong className="font-bold">Error: </strong>
+                                <span className="block sm:inline">{errorMsg}</span>
+                            </div>
+                        )}
+
+                        {stalls.map(stall => (
+                            <div key={stall.id} className={`border-2 rounded-2xl p-4 transition-all duration-300 ${isAdmin ? 'border-blue-200 bg-blue-50' : 'border-orange-100 bg-white card-shadow'}`}>
+                                
+                                {/* Header Row */}
+                                <div className="flex justify-between items-start mb-2">
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h2 className="text-lg font-bold text-gray-800 leading-tight">{stall.name}</h2>
+                                        </div>
+                                        <p className="text-xs text-gray-500 flex items-center gap-1">
+                                            <MapPin size={12} /> {stall.location}
+                                        </p>
+                                    </div>
+                                    <StatusBadge status={stall.status} waitTime={stall.waitTime} />
+                                </div>
+
+                                {/* Wait Time Display */}
+                                <div className="bg-orange-50 rounded-xl p-3 text-center mb-3 relative overflow-hidden border border-orange-100">
+                                    {stall.status === 'paused' || stall.status === 'full' ? (
+                                        <div className="py-2 text-gray-400 font-bold text-lg">
+                                            {stall.status === 'paused' ? '現在休止中' : '受付終了'}
+                                        </div>
+                                    ) : stall.status === 'scheduled' ? (
+                                        <div className="py-2 text-purple-600 font-bold">
+                                            次回: {stall.nextShow}
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Wait Time</p>
+                                            <div className="flex items-end justify-center gap-1 text-orange-600 leading-none">
+                                                <span className="text-5xl font-black tracking-tighter">{stall.waitTime}</span>
+                                                <span className="text-lg font-bold pb-2">分</span>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+
+                                {/* Admin Controls */}
+                                {isAdmin && (
+                                    <div className="bg-white rounded-lg p-3 border border-blue-100 shadow-inner">
+                                        <p className="text-xs text-center text-gray-400 font-bold mb-2">- 時間を更新 -</p>
+                                        
+                                        <div className="flex justify-center gap-3 mb-4">
+                                            <button 
+                                                onClick={() => updateWaitTime(stall.id, -5)}
+                                                className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg shadow-sm btn-press flex items-center justify-center gap-1"
+                                            >
+                                                <Minus size={16}/> 5分
+                                            </button>
+                                            <button 
+                                                onClick={() => updateWaitTime(stall.id, 5)}
+                                                className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md btn-press flex items-center justify-center gap-1"
+                                            >
+                                                <Plus size={16}/> 5分
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-3 gap-2 text-xs font-bold">
+                                            <button 
+                                                onClick={() => updateStatus(stall.id, 'open')}
+                                                className={`py-2 rounded ${stall.status === 'open' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500'}`}
+                                            >
+                                                営業中
+                                            </button>
+                                            <button 
+                                                onClick={() => updateStatus(stall.id, 'paused')}
+                                                className={`py-2 rounded ${stall.status === 'paused' ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-500'}`}
+                                            >
+                                                一時中断
+                                            </button>
+                                            <button 
+                                                onClick={() => updateStatus(stall.id, 'full')}
+                                                className={`py-2 rounded ${stall.status === 'full' ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-500'}`}
+                                            >
+                                                受付終了
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Timestamp */}
+                                <div className="mt-2 text-right">
+                                    <p className="text-[10px] text-gray-300">
+                                        最終更新: {stall.updatedAt ? new Date(stall.updatedAt.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--'}
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                    </main>
+
+                    {/* Login Modal */}
+                    {showLoginModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-2xl p-6 w-full max-w-xs shadow-2xl">
+                                <h3 className="text-lg font-bold text-gray-800 mb-4 text-center">スタッフ認証</h3>
+                                <form onSubmit={handleLogin}>
+                                    <div className="mb-4">
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">合言葉 (PIN)</label>
+                                        <input 
+                                            type="password" 
+                                            inputMode="numeric"
+                                            value={pinInput}
+                                            onChange={(e) => setPinInput(e.target.value)}
+                                            className="w-full text-center text-2xl font-bold tracking-widest border-2 border-gray-200 rounded-lg p-2 focus:border-orange-400 outline-none"
+                                            placeholder="****"
+                                            autoFocus
+                                        />
+                                        <p className="text-center text-xs text-gray-400 mt-2">※デモ用パスワード: 2025</p>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button 
+                                            type="button"
+                                            onClick={() => setShowLoginModal(false)}
+                                            className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-3 rounded-xl"
+                                        >
+                                            キャンセル
+                                        </button>
+                                        <button 
+                                            type="submit"
+                                            className="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl shadow-md"
+                                        >
+                                            ロック解除
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <footer className="text-center p-8 text-gray-400 text-xs">
+                        &copy; 2025 学園祭実行委員会
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
